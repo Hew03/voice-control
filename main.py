@@ -37,7 +37,7 @@ class VoiceTranscriberGUI:
             'channels': 1,
             'model_name': 'base',
             'hotkey': 'f2',
-            'translation_trigger': 'translate to chinese',
+            'translation_trigger': 'start translation',
             'stop_translation': 'stop translation',
             'roblox_window_title': 'Roblox',
             'enable_chinese_autocorrect': False
