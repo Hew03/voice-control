@@ -8,6 +8,7 @@ from audio_handler import AudioHandler
 from translation_manager import TranslationManager
 from roblox_interface import RobloxInterface
 from hotkey_manager import HotkeyManager
+from splash_screen import SplashScreen
 
 warnings.filterwarnings("ignore")
 
@@ -17,6 +18,12 @@ class VoiceTranscriberGUI:
         self.root.title("Voice Transcriber for Roblox")
         self.root.geometry("900x700")
         
+        self.splash = tk.Toplevel()
+        self.splash_screen = SplashScreen(self.splash)
+        self.root.withdraw()
+        
+        self.check_splash()
+
         self.config_manager = ConfigManager()
         self.message_queue = queue.Queue()
         
@@ -31,6 +38,16 @@ class VoiceTranscriberGUI:
         self.setup_components()
         self.process_messages()
     
+    def check_splash(self):
+        if self.splash_screen.update():
+            self.root.after(100, self.check_splash)
+        else:
+            self.splash.destroy()
+            self.root.deiconify()
+            self.setup_ui()
+            self.setup_components()
+            self.process_messages()
+
     def setup_components(self):
         """Initialize all components"""
         self.audio_handler.load_model_async()
