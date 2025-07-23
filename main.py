@@ -22,7 +22,7 @@ import json
 warnings.filterwarnings("ignore")
 
 class VoiceTranscriberGUI:
-    CONFIG_FILE = "voice_transcriber_config.json"
+    CONFIG_FILE = "config.json"
     
     def __init__(self, root):
         self.root = root
