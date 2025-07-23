@@ -1,22 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-import threading
 import queue
-import pyaudio
-import wave
-import tempfile
-import whisper
-import os
-import keyboard
-from pycorrector import Corrector
-import argostranslate.package
-import argostranslate.translate
-import re
 import time
-import win32gui
-import pyperclip
 import warnings
 from config_manager import ConfigManager
+from audio_handler import AudioHandler
+from translation_manager import TranslationManager
+from roblox_interface import RobloxInterface
+from hotkey_manager import HotkeyManager
 
 warnings.filterwarnings("ignore")
 
@@ -27,20 +18,27 @@ class VoiceTranscriberGUI:
         self.root.geometry("900x700")
         
         self.config_manager = ConfigManager()
-        self.p = pyaudio.PyAudio()
-        self.model = None
-        self.corrector = Corrector()
-        self.current_language = 'en'
-        self.is_recording = False
-        self.translation_mode = False
-        self.stream = None
         self.message_queue = queue.Queue()
         
+        self.audio_handler = AudioHandler(self.config_manager, self.message_queue)
+        self.translation_manager = TranslationManager(self.config_manager, self.message_queue)
+        self.roblox_interface = RobloxInterface(self.config_manager, self.message_queue)
+        self.hotkey_manager = HotkeyManager(self.config_manager, self.message_queue)
+        
+        self.is_recording = False
+        
         self.setup_ui()
-        self.load_model_async()
-        self.setup_translation_async()
-        self.setup_hotkey()
+        self.setup_components()
         self.process_messages()
+    
+    def setup_components(self):
+        """Initialize all components"""
+        self.audio_handler.load_model_async()
+        
+        self.translation_manager.setup_translation_async()
+        
+        self.hotkey_manager.register_hotkey('recording_toggle', self.toggle_recording)
+        self.hotkey_manager.setup_hotkeys()
     
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -115,7 +113,7 @@ class VoiceTranscriberGUI:
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
+
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
@@ -125,14 +123,28 @@ class VoiceTranscriberGUI:
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
     
+    def populate_microphones(self):
+        """Populate microphone dropdown"""
+        devices = self.audio_handler.get_audio_devices()
+        self.mic_combo['values'] = devices
+        
+        if devices:
+            for device in devices:
+                if device.startswith(str(self.config_manager.get('mic_index'))):
+                    self.mic_combo.set(device)
+                    break
+            else:
+                self.mic_combo.set(devices[0])
+    
     def save_settings(self):
+        """Save all settings to configuration"""
         mic_selection = self.mic_combo.get()
         mic_index = self.config_manager.get('mic_index')
         if mic_selection:
             try:
                 mic_index = int(mic_selection.split(':')[0])
             except (ValueError, IndexError):
-                pas
+                pass
         
         self.config_manager.update({
             'mic_index': mic_index,
@@ -148,74 +160,15 @@ class VoiceTranscriberGUI:
         })
         
         if self.config_manager.save_config():
-            try:
-                keyboard.unhook_all()
-                keyboard.hook(self._on_key_event)
-                self.log_message("Settings saved successfully")
-                self.log_message(f"Saved config: mic_index={self.config_manager.get('mic_index')}, model={self.config_manager.get('model_name')}")
-            except Exception as e:
-                self.log_message(f"Error updating hotkey: {e}")
+            self.hotkey_manager.update_hotkey(self.hotkey_entry.get())
+            self.log_message("Settings saved successfully")
+            self.log_message(f"Saved config: mic_index={self.config_manager.get('mic_index')}, model={self.config_manager.get('model_name')}")
         else:
             self.log_message("Failed to save settings to file")
     
-    def populate_microphones(self):
-        devices = []
-        for i in range(self.p.get_device_count()):
-            info = self.p.get_device_info_by_index(i)
-            if info['maxInputChannels'] > 0:
-                devices.append(f"{i}: {info['name']}")
-        
-        self.mic_combo['values'] = devices
-        if devices:
-            for device in devices:
-                if device.startswith(str(self.config_manager.get('mic_index'))):
-                    self.mic_combo.set(device)
-                    break
-            else:
-                self.mic_combo.set(devices[0])
-    
-    def load_model_async(self):
-        def load_model():
-            try:
-                self.message_queue.put(("status", "Loading Whisper model..."))
-                self.model = whisper.load_model(self.config_manager.get('model_name'))
-                self.message_queue.put(("status", "Model loaded successfully"))
-                self.message_queue.put(("enable_controls", True))
-            except Exception as e:
-                self.message_queue.put(("error", f"Failed to load model: {e}"))
-        
-        threading.Thread(target=load_model, daemon=True).start()
-    
-    def setup_translation_async(self):
-        def setup_translation():
-            try:
-                self.message_queue.put(("status", "Setting up translation..."))
-                argostranslate.package.update_package_index()
-                
-                available_packages = argostranslate.package.get_available_packages()
-                for pkg in available_packages:
-                    if pkg.from_code == "en" and pkg.to_code == "zh":
-                        argostranslate.package.install_from_path(pkg.download())
-                        break
-                
-                self.message_queue.put(("log", "Translation setup complete"))
-            except Exception as e:
-                self.message_queue.put(("log", f"Translation setup failed: {e}"))
-        
-        threading.Thread(target=setup_translation, daemon=True).start()
-    
-    def setup_hotkey(self):
-        try:
-            keyboard.hook(self._on_key_event)
-        except Exception as e:
-            self.log_message(f"Hotkey setup failed: {e}")
-    
-    def _on_key_event(self, e):
-        if e.name == self.config_manager.get('hotkey') and e.event_type == 'down':
-            self.toggle_recording()
-    
     def toggle_recording(self):
-        if not self.model:
+        """Toggle audio recording on/off"""
+        if not self.audio_handler.model:
             messagebox.showwarning("Warning", "Model not loaded yet!")
             return
         
@@ -224,187 +177,65 @@ class VoiceTranscriberGUI:
         if self.is_recording:
             self.record_button.config(text="Stop Recording (F2)")
             self.recording_indicator.config(text="🔴", foreground="red")
-            self.start_recording()
+            
+            mic_selection = self.mic_combo.get()
+            mic_index = None
+            if mic_selection:
+                try:
+                    mic_index = int(mic_selection.split(':')[0])
+                except (ValueError, IndexError):
+                    mic_index = self.config_manager.get('mic_index')
+            
+            self.audio_handler.start_recording(mic_index)
         else:
             self.record_button.config(text="Start Recording (F2)")
             self.recording_indicator.config(text="⚫", foreground="gray")
-    
-    def start_recording(self):
-        def record():
-            try:
-                frames = self.record_audio()
-                if frames:
-                    self.process_audio(frames)
-            except Exception as e:
-                self.message_queue.put(("error", f"Recording error: {e}"))
-        
-        threading.Thread(target=record, daemon=True).start()
-    
-    def record_audio(self):
-        frames = []
-        try:
-            mic_selection = self.mic_combo.get()
-            if mic_selection:
-                mic_index = int(mic_selection.split(':')[0])
-            else:
-                mic_index = self.config_manager.get('mic_index')
-            
-            self.stream = self.p.open(
-                format=pyaudio.paInt16,
-                channels=self.config_manager.get('channels'),
-                rate=self.config_manager.get('rate'),
-                input=True,
-                input_device_index=mic_index,
-                frames_per_buffer=self.config_manager.get('chunk')
-            )
-            
-            self.message_queue.put(("log", "Recording... (press F2 to stop)"))
-            
-            while self.is_recording:
-                try:
-                    data = self.stream.read(self.config_manager.get('chunk'))
-                    frames.append(data)
-                except OSError as e:
-                    self.message_queue.put(("error", f"Audio error: {e}"))
-                    break
-                    
-        finally:
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-                self.stream = None
-        
-        return frames
-    
-    def process_audio(self, frames):
-        temp_path = None
-        try:
-            temp_path = self.save_temp_audio(frames)
-            
-            self.message_queue.put(("log", "Transcribing..."))
-            result = self.model.transcribe(temp_path, task='transcribe', language=None)
-            
-            raw_text, lang = self.process_transcription(result)
-            if raw_text is None:
-                return
-            
-            corrected_text, corrections = self.correct_transcription(raw_text, lang)
-            
-            if self.check_trigger_phrases(corrected_text, lang):
-                return
-            
-            if self.translation_mode and lang == 'en':
-                translated_text = self.translate_to_chinese(corrected_text)
-                self.message_queue.put(("log", f"Original: {corrected_text}"))
-                self.message_queue.put(("log", f"Chinese: {translated_text}"))
-                self.send_to_roblox(translated_text)
-            else:
-                self.message_queue.put(("log", f"Transcribed ({lang}): {corrected_text}"))
-                self.send_to_roblox(corrected_text)
-                
-        except Exception as e:
-            self.message_queue.put(("error", f"Processing error: {e}"))
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.unlink(temp_path)
-    
-    def save_temp_audio(self, frames):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-            with wave.open(tf.name, 'wb') as wf:
-                wf.setnchannels(self.config_manager.get('channels'))
-                wf.setsampwidth(self.p.get_sample_size(pyaudio.paInt16))
-                wf.setframerate(self.config_manager.get('rate'))
-                wf.writeframes(b''.join(frames))
-            return tf.name
-    
-    def process_transcription(self, result):
-        detected_lang = result.get("language", "")
-        raw_text = result["text"].strip()
-        
-        if detected_lang not in ['en', 'zh']:
-            self.message_queue.put(("log", "Unsupported language detected. Please speak English or Chinese."))
-            return None, None
-        
-        self.current_language = detected_lang
-        return raw_text, detected_lang
-    
-    def correct_transcription(self, text, lang):
-        if lang == 'zh' and self.config_manager.get('enable_chinese_autocorrect'):
-            result = self.corrector.correct(text)
-            return result['target'], result.get('errors', [])
-        return text, []
-    
-    def check_trigger_phrases(self, text, lang):
-        if lang != 'en':
-            return False
-        
-        trigger = self.config_manager.get('translation_trigger').lower()
-        stop = self.config_manager.get('stop_translation').lower()
-        
-        if re.search(r'\b' + re.escape(trigger) + r'\b', text.lower()):
-            self.translation_mode = True
-            self.message_queue.put(("log", f"Translation mode activated by phrase: {trigger}"))
-            self.update_translation_button()
-            return True
-        
-        if re.search(r'\b' + re.escape(stop) + r'\b', text.lower()) and self.translation_mode:
-            self.translation_mode = False
-            self.message_queue.put(("log", f"Translation mode deactivated by phrase: {stop}"))
-            self.update_translation_button()
-            return True
-        
-        return False
-        
-    def translate_to_chinese(self, text):
-        try:
-            return argostranslate.translate.translate(text, "en", "zh")
-        except Exception as e:
-            self.message_queue.put(("error", f"Translation error: {e}"))
-            return text
-    
-    def send_to_roblox(self, text):
-        try:
-            window = win32gui.GetForegroundWindow()
-            title = win32gui.GetWindowText(window)
-            
-            if self.config_manager.get('roblox_window_title') not in title:
-                self.message_queue.put(("log", "Roblox not focused. Message copied to clipboard."))
-                pyperclip.copy(text)
-                return
-            
-            pyperclip.copy(text)
-            keyboard.press_and_release('/')
-            time.sleep(0.1)
-            keyboard.press_and_release('ctrl+v')
-            time.sleep(0.1)
-            keyboard.press_and_release('enter')
-            
-            self.message_queue.put(("log", "Message sent to Roblox"))
-            
-        except Exception as e:
-            self.message_queue.put(("error", f"Failed to send to Roblox: {e}"))
-            pyperclip.copy(text)
-            self.message_queue.put(("log", "Message copied to clipboard instead"))
+            self.audio_handler.stop_recording()
     
     def toggle_translation_mode(self):
-        self.translation_mode = not self.translation_mode
-        self.update_translation_button()
-        status = "activated" if self.translation_mode else "deactivated"
-        self.log_message(f"Translation mode {status}")
+        """Toggle translation mode on/off"""
+        mode = self.translation_manager.toggle_translation_mode()
+        self.update_translation_button(mode)
     
-    def update_translation_button(self):
-        status = "ON" if self.translation_mode else "OFF"
+    def update_translation_button(self, translation_active=None):
+        """Update translation button text"""
+        if translation_active is None:
+            translation_active = self.translation_manager.is_translation_active()
+        
+        status = "ON" if translation_active else "OFF"
         self.translation_button.config(text=f"Translation Mode: {status}")
     
     def clear_log(self):
+        """Clear the log text area"""
         self.log_text.delete(1.0, tk.END)
     
     def log_message(self, message):
+        """Add a timestamped message to the log"""
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_text.see(tk.END)
     
+    def process_audio_result(self, raw_text, lang):
+        """Process the result from audio transcription"""
+        if raw_text is None or lang is None:
+            return
+        
+        corrected_text, corrections = self.translation_manager.correct_transcription(raw_text, lang)
+        
+        if self.translation_manager.check_trigger_phrases(corrected_text, lang):
+            return
+        
+        if self.translation_manager.is_translation_active() and lang == 'en':
+            translated_text = self.translation_manager.translate_to_chinese(corrected_text)
+            self.log_message(f"Original: {corrected_text}")
+            self.log_message(f"Chinese: {translated_text}")
+            self.roblox_interface.send_message(translated_text)
+        else:
+            self.log_message(f"Transcribed ({lang}): {corrected_text}")
+            self.roblox_interface.send_message(corrected_text)
+    
     def process_messages(self):
+        """Process messages from the message queue"""
         try:
             while True:
                 msg_type, content = self.message_queue.get_nowait()
@@ -418,6 +249,11 @@ class VoiceTranscriberGUI:
                 elif msg_type == "enable_controls":
                     self.record_button.config(state="normal")
                     self.status_label.config(text="Ready - Press F2 to start recording")
+                elif msg_type == "translation_mode_changed":
+                    self.update_translation_button(content)
+                elif msg_type == "audio_processed":
+                    raw_text, lang = content
+                    self.process_audio_result(raw_text, lang)
                     
         except queue.Empty:
             pass
@@ -425,12 +261,10 @@ class VoiceTranscriberGUI:
         self.root.after(100, self.process_messages)
     
     def on_closing(self):
+        """Handle application closing"""
         try:
-            keyboard.unhook_all()
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-            self.p.terminate()
+            self.hotkey_manager.cleanup()
+            self.audio_handler.cleanup()
         except:
             pass
         self.root.destroy()

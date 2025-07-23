@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import pyaudio
 
 class ConfigManager:
     CONFIG_FILE = "config.json"
