@@ -5,6 +5,9 @@ import whisper
 import os
 import keyboard
 from pycorrector import Corrector
+import argostranslate.package
+import argostranslate.translate
+import re
 
 # Configuration Constants
 MIC_INDEX = 4
@@ -14,6 +17,7 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 MODEL_NAME = "base"
 HOTKEY = 'enter'
+TRANSLATION_TRIGGER_PHRASE = "translate to chinese"
 
 class VoiceTranscriber:
     def __init__(self):
@@ -23,7 +27,25 @@ class VoiceTranscriber:
         self.current_language = 'en'
         self.is_recording = False
         self.stream = None
+        self.translation_mode = False
+        self.setup_translation()
         
+    def setup_translation(self):
+        """Initialize translation packages and models"""
+        argostranslate.package.update_package_index()
+        available_packages = argostranslate.package.get_available_packages()
+        package_to_install = next(
+            filter(
+                lambda x: x.from_code == "en" and x.to_code == "zh",
+                available_packages
+            )
+        )
+        argostranslate.package.install_from_path(package_to_install.download())
+        
+    def translate_to_chinese(self, text):
+        """Translate English text to Chinese"""
+        return argostranslate.translate.translate(text, "en", "zh")
+    
     def list_audio_devices(self):
         """List available audio input devices"""
         print("\nAvailable input devices:")
@@ -93,7 +115,6 @@ class VoiceTranscriber:
         detected_lang = res.get("language", "")
         raw_text = res["text"].strip()
 
-        # Handle unsupported languages
         if detected_lang not in ['en', 'zh']:
             print(f"\n⚠️ {'Unsupported language' if detected_lang else 'No language detected'}")
             print("Please speak English or Chinese")
@@ -121,6 +142,12 @@ class VoiceTranscriber:
         """Remove temporary audio file"""
         if file_path and os.path.exists(file_path):
             os.unlink(file_path)
+
+    def normalize_text(self, text):
+        """Normalize text for comparison: lowercase and remove non-alphabetic chars"""
+        text = text.lower()
+        text = re.sub(r'[^a-z]', '', text)
+        return text
     
     def run(self):
         """Main application loop"""
@@ -146,9 +173,24 @@ class VoiceTranscriber:
                             raw_text, lang
                         )
                         
-                        self.print_results(
-                            raw_text, corrected_text, corrections, lang
-                        )
+                        normalized_input = self.normalize_text(corrected_text)
+                        normalized_trigger = self.normalize_text(TRANSLATION_TRIGGER_PHRASE)
+
+                        if (lang == 'en' and 
+                            normalized_trigger in normalized_input):
+                            self.translation_mode = True
+                            print("\n🔁 Translation mode activated. Next English input will be translated.")
+                            continue
+                            
+                        if self.translation_mode and lang == 'en':
+                            translated_text = self.translate_to_chinese(corrected_text)
+                            print("\n🌐 Translation to Chinese:")
+                            print(translated_text)
+                            self.translation_mode = False
+                        else:
+                            self.print_results(
+                                raw_text, corrected_text, corrections, lang
+                            )
                     
                     finally:
                         self.cleanup_temp_file(temp_path)
@@ -164,5 +206,5 @@ class VoiceTranscriber:
 
 if __name__ == "__main__":
     transcriber = VoiceTranscriber()
-    transcriber.list_audio_devices()
+    transcriber.list_audio_devices()  
     transcriber.run()
