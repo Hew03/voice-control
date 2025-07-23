@@ -8,16 +8,19 @@ from pycorrector import Corrector
 import argostranslate.package
 import argostranslate.translate
 import re
+import time
+import win32gui
+import pyperclip
 
-# Configuration Constants
 MIC_INDEX = 4
 RATE = 48000
 CHUNK = 4096
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 MODEL_NAME = "base"
-HOTKEY = 'enter'
+HOTKEY = 'f2'
 TRANSLATION_TRIGGER_PHRASE = "translate to chinese"
+ROBLOX_WINDOW_TITLE = "Roblox"
 
 class VoiceTranscriber:
     def __init__(self):
@@ -29,18 +32,19 @@ class VoiceTranscriber:
         self.stream = None
         self.translation_mode = False
         self.setup_translation()
-        
+        keyboard.hook(self._on_key_event)
+
+    def _on_key_event(self, e):
+        """Global hook callback for all key events."""
+        if e.name == HOTKEY and e.event_type == 'down':
+            self.toggle_recording()
+
     def setup_translation(self):
-        """Initialize translation packages and models"""
         argostranslate.package.update_package_index()
-        available_packages = argostranslate.package.get_available_packages()
-        package_to_install = next(
-            filter(
-                lambda x: x.from_code == "en" and x.to_code == "zh",
-                available_packages
-            )
-        )
-        argostranslate.package.install_from_path(package_to_install.download())
+        for pkg in argostranslate.package.get_available_packages():
+            if pkg.from_code == "en" and pkg.to_code == "zh":
+                argostranslate.package.install_from_path(pkg.download())
+                break
         
     def translate_to_chinese(self, text):
         """Translate English text to Chinese"""
@@ -72,7 +76,7 @@ class VoiceTranscriber:
     def record_audio(self):
         """Capture audio while recording is active"""
         frames = []
-        print("\nRecording... (press Enter to stop)")
+        print("\nRecording... (press F2 to stop)")
         
         try:
             self.start_audio_stream()
@@ -148,12 +152,42 @@ class VoiceTranscriber:
         text = text.lower()
         text = re.sub(r'[^a-z]', '', text)
         return text
-    
-    def run(self):
-        """Main application loop"""
-        keyboard.add_hotkey(HOTKEY, self.toggle_recording)
-        print(f"\nPress {HOTKEY} to start/stop recording (works globally)")
+
+    def is_roblox_focused(self):
+        """Check if Roblox is the currently focused window"""
+        try:
+            window = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(window)
+            return ROBLOX_WINDOW_TITLE in title
+        except Exception:
+            return False
+
+    def send_to_roblox(self, text):
+        """Send text to Roblox chat using simulated keystrokes"""
+        if not self.is_roblox_focused():
+            print("Roblox not focused. Message not sent.")
+            return False
+
+        pyperclip.copy(text)
         
+        keyboard.press('/')
+        keyboard.release('/')
+        time.sleep(0.1)
+        
+        keyboard.press('ctrl')
+        keyboard.press('v')
+        keyboard.release('v')
+        keyboard.release('ctrl')
+        time.sleep(0.1)
+        
+        keyboard.press('enter')
+        keyboard.release('enter')
+        
+        print("Message sent to Roblox")
+        return True
+
+    def run(self):
+        print(f"\nPress {HOTKEY} to start/stop recording")
         try:
             while True:
                 if self.is_recording:
@@ -161,50 +195,42 @@ class VoiceTranscriber:
                     self.is_recording = False
 
                     temp_path = self.save_temp_audio(frames)
-                    
                     try:
                         res = self.transcribe_audio(temp_path)
                         raw_text, lang = self.process_transcription(res)
-                        
                         if raw_text is None:
                             continue
-                            
-                        corrected_text, corrections = self.correct_transcription(
-                            raw_text, lang
-                        )
-                        
+                        corrected_text, corrections = self.correct_transcription(raw_text, lang)
+
                         normalized_input = self.normalize_text(corrected_text)
                         normalized_trigger = self.normalize_text(TRANSLATION_TRIGGER_PHRASE)
 
-                        if (lang == 'en' and 
-                            normalized_trigger in normalized_input):
+                        if lang == 'en' and normalized_trigger in normalized_input:
                             self.translation_mode = True
                             print("\n🔁 Translation mode activated. Next English input will be translated.")
                             continue
-                            
+
                         if self.translation_mode and lang == 'en':
                             translated_text = self.translate_to_chinese(corrected_text)
                             print("\n🌐 Translation to Chinese:")
                             print(translated_text)
                             self.translation_mode = False
+                            self.send_to_roblox(translated_text)
                         else:
-                            self.print_results(
-                                raw_text, corrected_text, corrections, lang
-                            )
-                    
+                            self.print_results(raw_text, corrected_text, corrections, lang)
+                            self.send_to_roblox(corrected_text)
+
                     finally:
                         self.cleanup_temp_file(temp_path)
-                    
-                    print(f"\nPress {HOTKEY} to start recording again...")
-        
+                        print(f"\nPress {HOTKEY} to start recording again...")
+
         except KeyboardInterrupt:
             print("\nExiting...")
         finally:
+            keyboard.unhook_all()
             self.p.terminate()
-            keyboard.unhook_all_hotkeys()
-
 
 if __name__ == "__main__":
     transcriber = VoiceTranscriber()
-    transcriber.list_audio_devices()  
+    transcriber.list_audio_devices()    
     transcriber.run()
