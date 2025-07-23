@@ -15,19 +15,21 @@ import re
 import time
 import win32gui
 import pyperclip
-import logging
 import warnings
 from pathlib import Path
+import json
 
 warnings.filterwarnings("ignore")
 
 class VoiceTranscriberGUI:
+    CONFIG_FILE = "voice_transcriber_config.json"
+    
     def __init__(self, root):
         self.root = root
         self.root.title("Voice Transcriber for Roblox")
-        self.root.geometry("800x600")
+        self.root.geometry("900x700")
         
-        self.config = {
+        self.default_config = {
             'mic_index': 4,
             'rate': 48000,
             'chunk': 4096,
@@ -41,6 +43,7 @@ class VoiceTranscriberGUI:
             'enable_chinese_autocorrect': False
         }
         
+        self.config = self.load_config()
         self.p = pyaudio.PyAudio()
         self.model = None
         self.corrector = Corrector()
@@ -48,15 +51,32 @@ class VoiceTranscriberGUI:
         self.is_recording = False
         self.translation_mode = False
         self.stream = None
-        
         self.message_queue = queue.Queue()
         
         self.setup_ui()
         self.load_model_async()
         self.setup_translation_async()
         self.setup_hotkey()
-        
         self.process_messages()
+    
+    def load_config(self):
+        try:
+            if Path(self.CONFIG_FILE).exists():
+                with open(self.CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    return {**self.default_config, **config}
+        except Exception as e:
+            print(f"Error loading config: {e}")
+        return self.default_config
+    
+    def save_config(self):
+        try:
+            with open(self.CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f, indent=4)
+            return True
+        except Exception as e:
+            print(f"Error saving config: {e}")
+            return False
     
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -74,16 +94,13 @@ class VoiceTranscriberGUI:
         controls_frame = ttk.LabelFrame(main_frame, text="Controls", padding="5")
         controls_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        self.record_button = ttk.Button(controls_frame, text="Start Recording (F2)", 
-                                       command=self.toggle_recording)
+        self.record_button = ttk.Button(controls_frame, text="Start Recording (F2)", command=self.toggle_recording)
         self.record_button.grid(row=0, column=0, padx=(0, 5))
         
-        self.translation_button = ttk.Button(controls_frame, text="Toggle Translation Mode", 
-                                           command=self.toggle_translation_mode)
+        self.translation_button = ttk.Button(controls_frame, text="Toggle Translation Mode", command=self.toggle_translation_mode)
         self.translation_button.grid(row=0, column=1, padx=(0, 5))
         
-        self.clear_button = ttk.Button(controls_frame, text="Clear Log", 
-                                     command=self.clear_log)
+        self.clear_button = ttk.Button(controls_frame, text="Clear Log", command=self.clear_log)
         self.clear_button.grid(row=0, column=2)
         
         settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding="5")
@@ -104,8 +121,33 @@ class VoiceTranscriberGUI:
         self.hotkey_entry.insert(0, self.config['hotkey'])
         self.hotkey_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
         
+        trigger_frame = ttk.LabelFrame(main_frame, text="Trigger Phrases", padding="5")
+        trigger_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        ttk.Label(trigger_frame, text="Start Translation:").grid(row=0, column=0, sticky=tk.W)
+        self.start_translation_entry = ttk.Entry(trigger_frame)
+        self.start_translation_entry.insert(0, self.config['translation_trigger'])
+        self.start_translation_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
+        
+        ttk.Label(trigger_frame, text="Stop Translation:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        self.stop_translation_entry = ttk.Entry(trigger_frame)
+        self.stop_translation_entry.insert(0, self.config['stop_translation'])
+        self.stop_translation_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
+        
+        ttk.Label(trigger_frame, text="Roblox Window Title:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        self.roblox_title_entry = ttk.Entry(trigger_frame)
+        self.roblox_title_entry.insert(0, self.config['roblox_window_title'])
+        self.roblox_title_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
+        
+        self.chinese_correct_var = tk.BooleanVar(value=self.config['enable_chinese_autocorrect'])
+        self.chinese_correct_cb = ttk.Checkbutton(trigger_frame, text="Enable Chinese Autocorrect", variable=self.chinese_correct_var)
+        self.chinese_correct_cb.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        
+        self.save_settings_btn = ttk.Button(trigger_frame, text="Save Settings", command=self.save_settings)
+        self.save_settings_btn.grid(row=4, column=0, columnspan=2, pady=(5, 0))
+        
         log_frame = ttk.LabelFrame(main_frame, text="Transcription Log", padding="5")
-        log_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -113,10 +155,29 @@ class VoiceTranscriberGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         settings_frame.columnconfigure(1, weight=1)
+        trigger_frame.columnconfigure(1, weight=1)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
+    
+    def save_settings(self):
+        self.config['translation_trigger'] = self.start_translation_entry.get()
+        self.config['stop_translation'] = self.stop_translation_entry.get()
+        self.config['roblox_window_title'] = self.roblox_title_entry.get()
+        self.config['enable_chinese_autocorrect'] = self.chinese_correct_var.get()
+        self.config['hotkey'] = self.hotkey_entry.get()
+        self.config['model_name'] = self.model_combo.get()
+        
+        if self.save_config():
+            try:
+                keyboard.unhook_all()
+                keyboard.hook(self._on_key_event)
+                self.log_message("Settings saved successfully")
+            except Exception as e:
+                self.log_message(f"Error updating hotkey: {e}")
+        else:
+            self.log_message("Failed to save settings to file")
     
     def populate_microphones(self):
         devices = []
@@ -127,7 +188,6 @@ class VoiceTranscriberGUI:
         
         self.mic_combo['values'] = devices
         if devices:
-            # Try to select the configured device
             for device in devices:
                 if device.startswith(str(self.config['mic_index'])):
                     self.mic_combo.set(device)
@@ -153,7 +213,6 @@ class VoiceTranscriberGUI:
                 self.message_queue.put(("status", "Setting up translation..."))
                 argostranslate.package.update_package_index()
                 
-                # Check if Chinese translation package is available
                 available_packages = argostranslate.package.get_available_packages()
                 for pkg in available_packages:
                     if pkg.from_code == "en" and pkg.to_code == "zh":
@@ -300,24 +359,23 @@ class VoiceTranscriberGUI:
         if lang != 'en':
             return False
         
-        normalized_text = re.sub(r'[^a-z]', '', text.lower())
-        trigger = re.sub(r'[^a-z]', '', self.config['translation_trigger'].lower())
-        stop = re.sub(r'[^a-z]', '', self.config['stop_translation'].lower())
+        trigger = self.config['translation_trigger'].lower()
+        stop = self.config['stop_translation'].lower()
         
-        if trigger in normalized_text:
+        if re.search(r'\b' + re.escape(trigger) + r'\b', text.lower()):
             self.translation_mode = True
-            self.message_queue.put(("log", "Translation mode activated"))
+            self.message_queue.put(("log", f"Translation mode activated by phrase: {trigger}"))
             self.update_translation_button()
             return True
         
-        if stop in normalized_text and self.translation_mode:
+        if re.search(r'\b' + re.escape(stop) + r'\b', text.lower()) and self.translation_mode:
             self.translation_mode = False
-            self.message_queue.put(("log", "Translation mode deactivated"))
+            self.message_queue.put(("log", f"Translation mode deactivated by phrase: {stop}"))
             self.update_translation_button()
             return True
         
         return False
-    
+        
     def translate_to_chinese(self, text):
         try:
             return argostranslate.translate.translate(text, "en", "zh")
@@ -401,7 +459,6 @@ class VoiceTranscriberGUI:
 def main():
     root = tk.Tk()
     app = VoiceTranscriberGUI(root)
-    
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
     root.mainloop()
 
