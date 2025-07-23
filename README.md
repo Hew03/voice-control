@@ -1,1 +1,6 @@
-This simple script is just for me to type sentances or execute actions in games trough voice command and i aint paying for the available applications on the web
+Voice Transcriber for Roblox 🎙️➡️🎮
+
+I built this because:
+Commercial solutions were overpriced
+I wanted direct control over my voice commands
+Open source means I can customize everything
