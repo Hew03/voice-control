@@ -24,8 +24,9 @@ CHANNELS = 1
 MODEL_NAME = "base"
 HOTKEY = 'f2'
 TRANSLATION_TRIGGER_PHRASE = "translate to chinese"
+STOP_TRANSLATION_PHRASE = "stop translation"
 ROBLOX_WINDOW_TITLE = "Roblox"
-DEBUG_MODE = False
+DEBUG_MODE = True
 ENABLE_CHINESE_AUTOCORRECT = False
 
 logging.basicConfig(
@@ -146,6 +147,22 @@ class VoiceTranscriber:
         text = re.sub(r'[^a-z]', '', text)
         return text
 
+    def check_trigger_phrases(self, text, lang):
+        normalized_text = self.normalize_text(text)
+        normalized_trigger = self.normalize_text(TRANSLATION_TRIGGER_PHRASE)
+        normalized_stop = self.normalize_text(STOP_TRANSLATION_PHRASE)
+        
+        if lang == 'en':
+            if normalized_trigger in normalized_text:
+                self.translation_mode = True
+                logger.info("Translation mode activated. All English will be translated until 'stop translation' is said.")
+                return True
+            if normalized_stop in normalized_text and self.translation_mode:
+                self.translation_mode = False
+                logger.info("Translation mode deactivated.")
+                return True
+        return False
+
     def is_roblox_focused(self):
         try:
             window = win32gui.GetForegroundWindow()
@@ -185,22 +202,21 @@ class VoiceTranscriber:
                         raw_text, lang = self.process_transcription(res)
                         if raw_text is None:
                             continue
+                        
                         corrected_text, corrections = self.correct_transcription(raw_text, lang)
-                        normalized_input = self.normalize_text(corrected_text)
-                        normalized_trigger = self.normalize_text(TRANSLATION_TRIGGER_PHRASE)
-                        if lang == 'en' and normalized_trigger in normalized_input:
-                            self.translation_mode = True
-                            logger.info("Translation mode activated. Next English input will be translated.")
+                        
+                        if self.check_trigger_phrases(corrected_text, lang):
                             continue
+                            
                         if self.translation_mode and lang == 'en':
                             translated_text = self.translate_to_chinese(corrected_text)
                             logger.info("Translation to Chinese:")
                             logger.info(translated_text)
-                            self.translation_mode = False
                             self.send_to_roblox(translated_text)
                         else:
                             self.print_results(raw_text, corrected_text, corrections, lang)
                             self.send_to_roblox(corrected_text)
+                            
                     finally:
                         self.cleanup_temp_file(temp_path)
                         logger.info(f"Press {HOTKEY} to start recording again...")
