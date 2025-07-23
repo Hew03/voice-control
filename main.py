@@ -16,34 +16,17 @@ import time
 import win32gui
 import pyperclip
 import warnings
-from pathlib import Path
-import json
+from config_manager import ConfigManager
 
 warnings.filterwarnings("ignore")
 
 class VoiceTranscriberGUI:
-    CONFIG_FILE = "config.json"
-    
     def __init__(self, root):
         self.root = root
         self.root.title("Voice Transcriber for Roblox")
         self.root.geometry("900x700")
         
-        self.default_config = {
-            'mic_index': 4,
-            'rate': 48000,
-            'chunk': 4096,
-            'format': pyaudio.paInt16,
-            'channels': 1,
-            'model_name': 'base',
-            'hotkey': 'f2',
-            'translation_trigger': 'start translation',
-            'stop_translation': 'stop translation',
-            'roblox_window_title': 'Roblox',
-            'enable_chinese_autocorrect': False
-        }
-        
-        self.config = self.load_config()
+        self.config_manager = ConfigManager()
         self.p = pyaudio.PyAudio()
         self.model = None
         self.corrector = Corrector()
@@ -58,25 +41,6 @@ class VoiceTranscriberGUI:
         self.setup_translation_async()
         self.setup_hotkey()
         self.process_messages()
-    
-    def load_config(self):
-        try:
-            if Path(self.CONFIG_FILE).exists():
-                with open(self.CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
-                    return {**self.default_config, **config}
-        except Exception as e:
-            print(f"Error loading config: {e}")
-        return self.default_config
-    
-    def save_config(self):
-        try:
-            with open(self.CONFIG_FILE, 'w') as f:
-                json.dump(self.config, f, indent=4)
-            return True
-        except Exception as e:
-            print(f"Error saving config: {e}")
-            return False
     
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -113,12 +77,12 @@ class VoiceTranscriberGUI:
         
         ttk.Label(settings_frame, text="Model:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         self.model_combo = ttk.Combobox(settings_frame, values=['tiny', 'base', 'small', 'medium', 'large'])
-        self.model_combo.set(self.config['model_name'])
+        self.model_combo.set(self.config_manager.get('model_name'))
         self.model_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
         
         ttk.Label(settings_frame, text="Hotkey:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
         self.hotkey_entry = ttk.Entry(settings_frame)
-        self.hotkey_entry.insert(0, self.config['hotkey'])
+        self.hotkey_entry.insert(0, self.config_manager.get('hotkey'))
         self.hotkey_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
         
         trigger_frame = ttk.LabelFrame(main_frame, text="Trigger Phrases", padding="5")
@@ -126,20 +90,20 @@ class VoiceTranscriberGUI:
         
         ttk.Label(trigger_frame, text="Start Translation:").grid(row=0, column=0, sticky=tk.W)
         self.start_translation_entry = ttk.Entry(trigger_frame)
-        self.start_translation_entry.insert(0, self.config['translation_trigger'])
+        self.start_translation_entry.insert(0, self.config_manager.get('translation_trigger'))
         self.start_translation_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
         
         ttk.Label(trigger_frame, text="Stop Translation:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
         self.stop_translation_entry = ttk.Entry(trigger_frame)
-        self.stop_translation_entry.insert(0, self.config['stop_translation'])
+        self.stop_translation_entry.insert(0, self.config_manager.get('stop_translation'))
         self.stop_translation_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
         
         ttk.Label(trigger_frame, text="Roblox Window Title:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
         self.roblox_title_entry = ttk.Entry(trigger_frame)
-        self.roblox_title_entry.insert(0, self.config['roblox_window_title'])
+        self.roblox_title_entry.insert(0, self.config_manager.get('roblox_window_title'))
         self.roblox_title_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(5, 0))
         
-        self.chinese_correct_var = tk.BooleanVar(value=self.config['enable_chinese_autocorrect'])
+        self.chinese_correct_var = tk.BooleanVar(value=self.config_manager.get('enable_chinese_autocorrect'))
         self.chinese_correct_cb = ttk.Checkbutton(trigger_frame, text="Enable Chinese Autocorrect", variable=self.chinese_correct_var)
         self.chinese_correct_cb.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
         
@@ -162,18 +126,33 @@ class VoiceTranscriberGUI:
         log_frame.rowconfigure(0, weight=1)
     
     def save_settings(self):
-        self.config['translation_trigger'] = self.start_translation_entry.get()
-        self.config['stop_translation'] = self.stop_translation_entry.get()
-        self.config['roblox_window_title'] = self.roblox_title_entry.get()
-        self.config['enable_chinese_autocorrect'] = self.chinese_correct_var.get()
-        self.config['hotkey'] = self.hotkey_entry.get()
-        self.config['model_name'] = self.model_combo.get()
+        mic_selection = self.mic_combo.get()
+        mic_index = self.config_manager.get('mic_index')
+        if mic_selection:
+            try:
+                mic_index = int(mic_selection.split(':')[0])
+            except (ValueError, IndexError):
+                pas
         
-        if self.save_config():
+        self.config_manager.update({
+            'mic_index': mic_index,
+            'translation_trigger': self.start_translation_entry.get(),
+            'stop_translation': self.stop_translation_entry.get(),
+            'roblox_window_title': self.roblox_title_entry.get(),
+            'enable_chinese_autocorrect': self.chinese_correct_var.get(),
+            'hotkey': self.hotkey_entry.get(),
+            'model_name': self.model_combo.get(),
+            'rate': self.config_manager.get('rate'),
+            'chunk': self.config_manager.get('chunk'),
+            'channels': self.config_manager.get('channels')
+        })
+        
+        if self.config_manager.save_config():
             try:
                 keyboard.unhook_all()
                 keyboard.hook(self._on_key_event)
                 self.log_message("Settings saved successfully")
+                self.log_message(f"Saved config: mic_index={self.config_manager.get('mic_index')}, model={self.config_manager.get('model_name')}")
             except Exception as e:
                 self.log_message(f"Error updating hotkey: {e}")
         else:
@@ -189,7 +168,7 @@ class VoiceTranscriberGUI:
         self.mic_combo['values'] = devices
         if devices:
             for device in devices:
-                if device.startswith(str(self.config['mic_index'])):
+                if device.startswith(str(self.config_manager.get('mic_index'))):
                     self.mic_combo.set(device)
                     break
             else:
@@ -199,7 +178,7 @@ class VoiceTranscriberGUI:
         def load_model():
             try:
                 self.message_queue.put(("status", "Loading Whisper model..."))
-                self.model = whisper.load_model(self.config['model_name'])
+                self.model = whisper.load_model(self.config_manager.get('model_name'))
                 self.message_queue.put(("status", "Model loaded successfully"))
                 self.message_queue.put(("enable_controls", True))
             except Exception as e:
@@ -232,7 +211,7 @@ class VoiceTranscriberGUI:
             self.log_message(f"Hotkey setup failed: {e}")
     
     def _on_key_event(self, e):
-        if e.name == self.config['hotkey'] and e.event_type == 'down':
+        if e.name == self.config_manager.get('hotkey') and e.event_type == 'down':
             self.toggle_recording()
     
     def toggle_recording(self):
@@ -268,22 +247,22 @@ class VoiceTranscriberGUI:
             if mic_selection:
                 mic_index = int(mic_selection.split(':')[0])
             else:
-                mic_index = self.config['mic_index']
+                mic_index = self.config_manager.get('mic_index')
             
             self.stream = self.p.open(
-                format=self.config['format'],
-                channels=self.config['channels'],
-                rate=self.config['rate'],
+                format=pyaudio.paInt16,
+                channels=self.config_manager.get('channels'),
+                rate=self.config_manager.get('rate'),
                 input=True,
                 input_device_index=mic_index,
-                frames_per_buffer=self.config['chunk']
+                frames_per_buffer=self.config_manager.get('chunk')
             )
             
             self.message_queue.put(("log", "Recording... (press F2 to stop)"))
             
             while self.is_recording:
                 try:
-                    data = self.stream.read(self.config['chunk'])
+                    data = self.stream.read(self.config_manager.get('chunk'))
                     frames.append(data)
                 except OSError as e:
                     self.message_queue.put(("error", f"Audio error: {e}"))
@@ -332,9 +311,9 @@ class VoiceTranscriberGUI:
     def save_temp_audio(self, frames):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
             with wave.open(tf.name, 'wb') as wf:
-                wf.setnchannels(self.config['channels'])
-                wf.setsampwidth(self.p.get_sample_size(self.config['format']))
-                wf.setframerate(self.config['rate'])
+                wf.setnchannels(self.config_manager.get('channels'))
+                wf.setsampwidth(self.p.get_sample_size(pyaudio.paInt16))
+                wf.setframerate(self.config_manager.get('rate'))
                 wf.writeframes(b''.join(frames))
             return tf.name
     
@@ -350,7 +329,7 @@ class VoiceTranscriberGUI:
         return raw_text, detected_lang
     
     def correct_transcription(self, text, lang):
-        if lang == 'zh' and self.config['enable_chinese_autocorrect']:
+        if lang == 'zh' and self.config_manager.get('enable_chinese_autocorrect'):
             result = self.corrector.correct(text)
             return result['target'], result.get('errors', [])
         return text, []
@@ -359,8 +338,8 @@ class VoiceTranscriberGUI:
         if lang != 'en':
             return False
         
-        trigger = self.config['translation_trigger'].lower()
-        stop = self.config['stop_translation'].lower()
+        trigger = self.config_manager.get('translation_trigger').lower()
+        stop = self.config_manager.get('stop_translation').lower()
         
         if re.search(r'\b' + re.escape(trigger) + r'\b', text.lower()):
             self.translation_mode = True
@@ -388,7 +367,7 @@ class VoiceTranscriberGUI:
             window = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(window)
             
-            if self.config['roblox_window_title'] not in title:
+            if self.config_manager.get('roblox_window_title') not in title:
                 self.message_queue.put(("log", "Roblox not focused. Message copied to clipboard."))
                 pyperclip.copy(text)
                 return
